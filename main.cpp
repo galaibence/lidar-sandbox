@@ -118,53 +118,6 @@ struct StopWatch {
 
 };
 
-//struct VPoint {
-//	float x, y, z, i, azimuth, d;
-//	int laser_id;
-//
-//	VPoint(float _x = 0.0f, float _y = 0.0f, float _z = 0.0f, float _i = 0.0f, int _laser_id = -1, float _azimuth = 0.0f, float _d = 0.0f)
-//		:x{ _x }, y{ _y }, z{ _z }, i{ _i }, laser_id {	_laser_id }, azimuth{ _azimuth }, d{ _d } {};
-//};
-//
-//struct VCloud {
-//	std::vector<VPoint> points;
-//
-//	bool read(std::string input_file) {
-//		if (!points.empty()) {
-//			points.clear();
-//			points.resize(0);
-//		}
-//
-//		int laser_ids[16] = { -15, 1, -13, 3, -11, 5, -9, 7, -7, 9, -5, 11, -3, 13, -1, 15 };
-//
-//		std::ifstream input;
-//		input.open(input_file);
-//
-//		if (!input.is_open()) return false;
-//
-//		std::string line;
-//		input >> line;
-//
-//		char c;
-//		float bullshit, laser_id;
-//		VPoint p;
-//		while (input >> p.x >> c >> p.y >> c >> p.z >> c >> p.i >> c >> laser_id >> c >> p.azimuth >> c >> p.d >> c >> bullshit >> c >> bullshit) {
-//			p.laser_id = p.laser_id;// laser_ids[int(laser_id)];
-//			points.push_back(p);
-//		}
-//
-//		return true;
-//	}
-//
-//	auto size() {
-//		return points.size();
-//	}
-//
-//	VPoint operator[](int i) {
-//		return points[i];
-//	}
-//};
-
 struct Cell {
   int hi, vi, di, label, object_id;
 
@@ -185,21 +138,13 @@ struct Cell {
   };
 
   void push_back(VPoint* p) {
-    //std::cout << "point: " << p->x << " " << p->y << " " << p->z << std::endl;
-    //std::cout << "\t" << min_x << " " << min_y << " " << min_z << std::endl;
-    //std::cout << "\t" << max_x << " " << max_y << " " << max_z << std::endl;
-
-     if (p->x < min_x) min_x = p->x;
+    if (p->x < min_x) min_x = p->x;
     if (p->y < min_y) min_y = p->y;
     if (p->z < min_z) min_z = p->z;
 
     if (p->x > max_x) max_x = p->x;
     if (p->y > max_y) max_y = p->y;
     if (p->z > max_z) max_z = p->z;
-
-    //std::cout << "\t" << min_x << " " << min_y << " " << min_z << std::endl;
-    //std::cout << "\t" << max_x << " " << max_y << " " << max_z << std::endl;
-    //std::cout << std::endl;
 
     points.push_back(p);
   }
@@ -233,98 +178,6 @@ struct Object {
   }
 };
 
-struct Node {
-  Node* NE;
-  Node* SE;
-  Node* SW;
-  Node* NW;
-
-  VPoint value;
-
-  Node() :NE{ nullptr }, SE{ nullptr }, SW{ nullptr }, NW{ nullptr } {}
-  Node(VPoint p) :NE{ nullptr }, SE{ nullptr }, SW{ nullptr }, NW{ nullptr } {
-    value.x = p.x;
-    value.y = p.y;
-  }
-
-};
-
-class QuadTree {
-private:
-  void destroyTree(Node* leaf) {
-    if (leaf != nullptr) {
-      destroyTree(leaf->NE);
-      destroyTree(leaf->SE);
-      destroyTree(leaf->SW);
-      destroyTree(leaf->NW);
-      delete leaf;
-    }
-  }
-
-  void insert(VPoint p, Node* leaf) {
-    if (p.x > leaf->value.x && p.y > leaf->value.y) {
-      if (leaf->NE != nullptr)
-        insert(p, leaf->NE);
-      else {
-        leaf->NE = new Node(p);
-      }
-    }
-    else if (p.x > leaf->value.x && p.y <= leaf->value.y) {
-      if (leaf->SE != nullptr)
-        insert(p, leaf->SE);
-      else {
-        leaf->SE = new Node(p);
-      }
-    }
-    else if (p.x <= leaf->value.x && p.y <= leaf->value.y) {
-      if (leaf->SW != nullptr)
-        insert(p, leaf->SW);
-      else {
-        leaf->SW = new Node(p);
-      }
-    }
-    else if (p.x <= leaf->value.x && p.y > leaf->value.y) {
-      if (leaf->NW != nullptr)
-        insert(p, leaf->NW);
-      else {
-        leaf->NW = new Node(p);
-      }
-    }
-  }
-
-  Node* search(VPoint p, Node* leaf, Node* parent) {
-    if (leaf != nullptr) {
-      if (p.x == leaf->value.x && p.y == leaf->value.y)
-        return leaf;
-      else if (p.x > leaf->value.x && p.y > leaf->value.y)
-        return search(p, leaf->NE, leaf);
-      else if (p.x > leaf->value.x && p.y <= leaf->value.y)
-        return search(p, leaf->SE, leaf);
-      else if (p.x <= leaf->value.x && p.y <= leaf->value.y)
-        return search(p, leaf->SW, leaf);
-      else if (p.x <= leaf->value.x && p.y > leaf->value.y)
-        return search(p, leaf->NW, leaf);
-    }
-    else return parent;
-  }
-
-  Node* root_;
-
-public:
-  QuadTree() :root_{ nullptr } {}
-  ~QuadTree() { destroyTree(root_); }
-
-  void insert(VPoint p) {
-    if (root_ != nullptr)
-      insert(p, root_);
-    else {
-      root_ = new Node(p);
-    }
-  }
-
-  Node* search(VPoint p) {}
-
-};
 
 struct SphericalGrid {
   std::vector<std::vector<std::list<Cell>>> voxels;
