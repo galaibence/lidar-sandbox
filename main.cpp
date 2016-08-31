@@ -9,6 +9,7 @@
 #include <queue>
 #include <cmath>
 #include <memory>
+#include <thread>
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -31,6 +32,9 @@
 // VLP16_project
 #include <VCloud.h>
 #include <VelodyneStreamer.h>
+
+using namespace std::chrono_literals;
+
 
 // SPHERICAL GRID PARAMETERS
 const int HORIZONTAL_RESOLUTION = 4;
@@ -160,8 +164,8 @@ struct Object {
   void calculateCenterPoint() {
     float minx = INT_MAX, miny = INT_MAX, minz = INT_MAX;
     float maxx = INT_MIN, maxy = INT_MIN, maxz = INT_MIN;
-    for (auto i = 0; i < cells.size(); i++) {
-      for (auto j = 0; j < cells[i]->points.size(); j++) {
+    for (size_t i = 0; i < cells.size(); i++) {
+      for (size_t j = 0; j < cells[i]->points.size(); j++) {
         if (cells[i]->points[j]->x < minx) minx = cells[i]->points[j]->x;
         if (cells[i]->points[j]->y < miny) miny = cells[i]->points[j]->y;
         if (cells[i]->points[j]->z < minz) minz = cells[i]->points[j]->z;
@@ -192,15 +196,15 @@ struct SphericalGrid {
 
   SphericalGrid(VCloud* _cloud, SensorType _type) :cloud{ _cloud }, type{ _type } {
     for (int i = 0; i < 360 / HORIZONTAL_RESOLUTION; i++) {
-      voxels.push_back(std::vector<std::list<Cell>>((type == VLP16 ? 8 : 8 )));
+      voxels.push_back(std::vector<std::list<Cell>>((type == SensorType::VLP16 ? 8 : 8 )));
     }
   }
 
   void fillGrid(bool debug = false) {
     int vi, hi, di;
-    int divider = (type == VLP16 ? 2 : 8);
+    int divider = (type == SensorType::VLP16 ? 2 : 8);
     bool insert_before = false;
-    for (auto i = 0; i < cloud->size(); i++) {
+    for (size_t i = 0; i < cloud->size(); i++) {
       if (cloud->at(i)->distance > 0.5f && cloud->at(i)->distance < 50.0f) {
         //vi = (cloud->at(i)->elevation + 15) / 4;
         vi = (cloud->at(i)->laser_id) / divider;
@@ -236,9 +240,10 @@ struct SphericalGrid {
   }
 
   void linkNeighbours() {
-    size_t i2, j2, d2;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    size_t i2, j2;
+    int d2;
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
         for (auto it = voxels[i][j].begin(); it != voxels[i][j].end(); it++) {
           // FOR EACH CELL TAKE IT'S POSSIBLE NEIGHBOURING INDICES
           for (int n = -1; n < 2; n++) {
@@ -271,11 +276,9 @@ struct SphericalGrid {
   }
 
   void clusterCells() {
-    int n = 0;
-    float sum = 0;
     float z_max, z_min;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
         for (auto it = voxels[i][j].begin(); it != voxels[i][j].end(); it++) {
           z_max = it->max_z;
           z_min = it->min_z;
@@ -284,36 +287,7 @@ struct SphericalGrid {
             if (cell->min_z < z_min) z_min = cell->min_z;
           }
 
-          pcl::PointXYZ p;
-          pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
-          for (auto point : it->points) {
-            p.x = point->x;
-            p.y = point->y;
-            p.z = point->z;
-            cloud->push_back(p);
-          }
-          //for (auto neighbour : it->neighbours) {
-          //  for (auto point : neighbour->points) {
-          //    p.x = point->x;
-          //    p.y = point->y;
-          //    p.z = point->z;
-          //    cloud->push_back(p);
-          //  }
-          //}
-          pcl::PCA<pcl::PointXYZ> pca;
-          float f3 = 0.0f, f1 = 0.0f, f2 = 0.0f;
-          if (cloud->size() > 3) {
-            pca.setInputCloud(cloud);
-            float l1 = pca.getEigenValues()[0];
-            float l2 = pca.getEigenValues()[1];
-            float l3 = pca.getEigenValues()[2];
-            float l123 = l1 + l2 + l3;
-            f1 = l1 / l123;
-            f2 = l2 / l123;
-            f3 = l3 / l123;
-          }
-
-          if (it->points.size() < CLUTTER_SIZE || f3 > 0.1) it->label = 1;
+          if (it->points.size() < CLUTTER_SIZE) it->label = 1;
           else if (z_max - z_min < GROUND_HEIGHT) it->label = 2;
           else it->label = 3;
         }
@@ -326,8 +300,8 @@ struct SphericalGrid {
 
     int object_number = 0;
     std::queue<Cell*> cell_queue;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
         for (auto it = voxels[i][j].begin(); it != voxels[i][j].end(); it++) {
           if (it->visited)
             continue;
@@ -336,7 +310,7 @@ struct SphericalGrid {
             it->visited = true;
             cell_queue.push(&(*it));
             while (!cell_queue.empty()) {
-              for (auto n = 0; n < cell_queue.front()->neighbours.size(); n++) {
+              for (size_t n = 0; n < cell_queue.front()->neighbours.size(); n++) {
                 if (!cell_queue.front()->neighbours[n]->visited &&
                   cell_queue.front()->neighbours[n]->label == 3)
 
@@ -378,7 +352,7 @@ struct VoxelGrid {
   void fillGrid(bool debug = false) {
     int xi, yi, zi;
     bool insert_before = false;
-    for (auto i = 0; i < cloud->size(); i++) {
+    for (size_t i = 0; i < cloud->size(); i++) {
       if (fabs(cloud->at(i)->x) >= 0.0f && fabs(cloud->at(i)->y) >= 0.0f &&
          fabs(cloud->at(i)->x) < 25.0f && fabs(cloud->at(i)->y) < 25.0f) {
         //vi = (cloud->at(i)->elevation + 15) / 4;
@@ -414,9 +388,10 @@ struct VoxelGrid {
   }
 
   void linkNeighbours() {
-    size_t i2, j2, d2;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    size_t i2, j2;
+    int d2;
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
         for (auto it = voxels[i][j].begin(); it != voxels[i][j].end(); it++) {
           // FOR EACH CELL TAKE IT'S POSSIBLE NEIGHBOURING INDICES
           for (int n = -1; n < 2; n++) {
@@ -448,11 +423,9 @@ struct VoxelGrid {
   }
 
   void clusterCells() {
-    int n = 0;
-    float sum = 0;
     float z_max, z_min;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
         for (auto it = voxels[i][j].begin(); it != voxels[i][j].end(); it++) {
           z_max = it->max_z;
           z_min = it->min_z;
@@ -461,36 +434,7 @@ struct VoxelGrid {
             if (cell->min_z < z_min) z_min = cell->min_z;
           }
 
-          pcl::PointXYZ p;
-          pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
-          for (auto point : it->points) {
-            p.x = point->x;
-            p.y = point->y;
-            p.z = point->z;
-            cloud->push_back(p);
-          }
-          //for (auto neighbour : it->neighbours) {
-          //  for (auto point : neighbour->points) {
-          //    p.x = point->x;
-          //    p.y = point->y;
-          //    p.z = point->z;
-          //    cloud->push_back(p);
-          //  }
-          //}
-          pcl::PCA<pcl::PointXYZ> pca;
-          float f3 = 0.0f, f1 = 0.0f, f2 = 0.0f;
-          if (cloud->size() > 3) {
-            pca.setInputCloud(cloud);
-            float l1 = pca.getEigenValues()[0];
-            float l2 = pca.getEigenValues()[1];
-            float l3 = pca.getEigenValues()[2];
-            float l123 = l1 + l2 + l3;
-            f1 = l1 / l123;
-            f2 = l2 / l123;
-            f3 = l3 / l123;
-          }
-
-          if (false && (it->points.size() < CLUTTER_SIZE || f3 > 0.1)) it->label = 1;
+          if (it->points.size() < CLUTTER_SIZE) it->label = 1;
           else if (z_max - z_min < GROUND_HEIGHT) it->label = 2;
           else it->label = 3;
         }
@@ -503,8 +447,8 @@ struct VoxelGrid {
 
     int object_number = 0;
     std::queue<Cell*> cell_queue;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
         for (auto it = voxels[i][j].begin(); it != voxels[i][j].end(); it++) {
           if (it->visited)
             continue;
@@ -513,7 +457,7 @@ struct VoxelGrid {
             it->visited = true;
             cell_queue.push(&(*it));
             while (!cell_queue.empty()) {
-              for (auto n = 0; n < cell_queue.front()->neighbours.size(); n++) {
+              for (size_t n = 0; n < cell_queue.front()->neighbours.size(); n++) {
                 if (!cell_queue.front()->neighbours[n]->visited &&
                   cell_queue.front()->neighbours[n]->label == 3)
 
@@ -521,7 +465,6 @@ struct VoxelGrid {
                 cell_queue.front()->neighbours[n]->visited = true;
               }
               cell_queue.front()->object_id = object_number;
-              Cell* c;
               object.cells.push_back(cell_queue.front());
               cell_queue.pop();
             }
@@ -554,9 +497,8 @@ struct SimpleGrid {
   }
 
   void fillGrid(bool debug = false) {
-    int xi, yi, zi;
-    bool insert_before = false;
-    for (auto i = 0; i < cloud->size(); i++) {
+    int xi, yi;
+    for (size_t i = 0; i < cloud->size(); i++) {
       if (fabs(cloud->at(i)->x) >= 0.0f && fabs(cloud->at(i)->y) >= 0.0f &&
         fabs(cloud->at(i)->x) < 25.0f && fabs(cloud->at(i)->y) < 25.0f) {
 
@@ -569,9 +511,9 @@ struct SimpleGrid {
   }
 
   void linkNeighbours() {
-    size_t i2, j2, d2;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    size_t i2, j2;
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
           for (int n = -1; n < 2; n++) {
             for (int m = -1; m < 2; m++) {
               // DON'T LINK WITH ITSELF
@@ -589,11 +531,9 @@ struct SimpleGrid {
   }
 
   void clusterCells() {
-    int n = 0;
-    float sum = 0;
     float z_max, z_min;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
         z_max = voxels[i][j].max_z;
         z_min = voxels[i][j].min_z;
         for (auto cell : voxels[i][j].neighbours) {
@@ -601,36 +541,7 @@ struct SimpleGrid {
           if (cell->min_z < z_min) z_min = cell->min_z;
         }
 
-        pcl::PointXYZ p;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
-        for (auto point : voxels[i][j].points) {
-          p.x = point->x;
-          p.y = point->y;
-          p.z = point->z;
-          cloud->push_back(p);
-        }
-        //for (auto neighbour : it->neighbours) {
-        //  for (auto point : neighbour->points) {
-        //    p.x = point->x;
-        //    p.y = point->y;
-        //    p.z = point->z;
-        //    cloud->push_back(p);
-        //  }
-        //}
-        pcl::PCA<pcl::PointXYZ> pca;
-        float f3 = 0.0f, f1 = 0.0f, f2 = 0.0f;
-        if (cloud->size() > 3) {
-          pca.setInputCloud(cloud);
-          float l1 = pca.getEigenValues()[0];
-          float l2 = pca.getEigenValues()[1];
-          float l3 = pca.getEigenValues()[2];
-          float l123 = l1 + l2 + l3;
-          f1 = l1 / l123;
-          f2 = l2 / l123;
-          f3 = l3 / l123;
-        }
-
-        if (false && (voxels[i][j].points.size() < CLUTTER_SIZE || f3 > 0.1)) voxels[i][j].label = 1;
+        if (voxels[i][j].points.size() < CLUTTER_SIZE) voxels[i][j].label = 1;
         else if (z_max - z_min < GROUND_HEIGHT) voxels[i][j].label = 2;
         else voxels[i][j].label = 3;
       }
@@ -642,8 +553,8 @@ struct SimpleGrid {
 
     int object_number = 0;
     std::queue<Cell*> cell_queue;
-    for (auto i = 0; i < voxels.size(); i++) {
-      for (auto j = 0; j < voxels[i].size(); j++) {
+    for (size_t i = 0; i < voxels.size(); i++) {
+      for (size_t j = 0; j < voxels[i].size(); j++) {
           if (voxels[i][j].visited)
             continue;
           else if (voxels[i][j].label == 3) {
@@ -651,7 +562,7 @@ struct SimpleGrid {
             voxels[i][j].visited = true;
             cell_queue.push(&voxels[i][j]);
             while (!cell_queue.empty()) {
-              for (auto n = 0; n < cell_queue.front()->neighbours.size(); n++) {
+              for (size_t n = 0; n < cell_queue.front()->neighbours.size(); n++) {
                 if (!cell_queue.front()->neighbours[n]->visited &&
                   cell_queue.front()->neighbours[n]->label == 3)
 
@@ -699,13 +610,13 @@ Eigen::Matrix4f coarseAlignment(char* transforms, std::vector<Object>& objects1,
   int dx_i, dy_i, rot_i;
 
   for (float rot = -MAX_ROT_D; rot < MAX_ROT_D + ROT_RESOLUTION; rot += ROT_RESOLUTION) {
-    for (int i = 0; i < objects1.size(); i++) {
+    for (size_t i = 0; i < objects1.size(); i++) {
       x1 = cos(DEG2RAD(rot)) * objects1[i].x
         - sin(DEG2RAD(rot)) * objects1[i].y;
       y1 = sin(DEG2RAD(rot)) * objects1[i].x
         + cos(DEG2RAD(rot)) * objects1[i].y;
 
-      for (int j = 0; j < objects2.size(); j++) {
+      for (size_t j = 0; j < objects2.size(); j++) {
         x2 = objects2[j].x;
         y2 = objects2[j].y;
 
@@ -770,22 +681,24 @@ Eigen::Matrix4f coarseAlignment(char* transforms, std::vector<Object>& objects1,
 }
 
 Eigen::Matrix4f fineAlignmentNDT(pcl::PointCloud<pcl::PointXYZRGB>::Ptr source, pcl::PointCloud<pcl::PointXYZRGB>::Ptr target) {
-  return Eigen::Matrix4f::Identity();
   pcl::NormalDistributionsTransform<pcl::PointXYZRGB, pcl::PointXYZRGB> ndt;
   
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr filtered_source(new pcl::PointCloud<pcl::PointXYZRGB>);
+  pcl::PointCloud<pcl::PointXYZRGB>::Ptr filtered_target(new pcl::PointCloud<pcl::PointXYZRGB>);
   pcl::ApproximateVoxelGrid<pcl::PointXYZRGB> approximate_voxel_filter;
   approximate_voxel_filter.setLeafSize(0.1, 0.1, 0.1);
   approximate_voxel_filter.setInputCloud(source);
   approximate_voxel_filter.filter(*filtered_source);
+  approximate_voxel_filter.setInputCloud(target);
+  approximate_voxel_filter.filter(*filtered_target);
 
   ndt.setTransformationEpsilon(0.01);
   ndt.setStepSize(0.1);
   ndt.setResolution(2.0);
   ndt.setMaximumIterations(35);
   
-  ndt.setInputSource(source);
-  ndt.setInputTarget(target);
+  ndt.setInputSource(filtered_source);
+  ndt.setInputTarget(filtered_target);
   
   pcl::PointCloud<pcl::PointXYZRGB> final;
   ndt.align(final);
@@ -813,7 +726,7 @@ void iteration(VCloud& cloud0, VCloud& cloud1, pcl::PointCloud<pcl::PointXYZRGB>
   
   pcl::PointXYZRGB pclp;
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud0(new pcl::PointCloud<pcl::PointXYZRGB>());
-  for (auto i = 0; i < cloud0.size(); i++) {
+  for (size_t i = 0; i < cloud0.size(); i++) {
     pclp.x = cloud0.at(i)->x;
     pclp.y = cloud0.at(i)->y;
     pclp.z = cloud0.at(i)->z;
@@ -849,7 +762,7 @@ void iteration(VCloud& cloud0, VCloud& cloud1, pcl::PointCloud<pcl::PointXYZRGB>
 
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud1(new pcl::PointCloud<pcl::PointXYZRGB>());
   pcl::PointXYZRGB prgb;
-  for (int i = 0; i < cloud1.size(); i++) {
+  for (size_t i = 0; i < cloud1.size(); i++) {
     prgb.x = cloud1[i].x;
     prgb.y = cloud1[i].y;
     prgb.z = cloud1[i].z;
@@ -860,7 +773,6 @@ void iteration(VCloud& cloud0, VCloud& cloud1, pcl::PointCloud<pcl::PointXYZRGB>
   }
 
   pcl::PointCloud<PCLMyPointType> mycloud;
-  PCLMyPointType mypoint;
 
 #ifdef COLOR_CLUSTERS
   for (auto cell_list_vector : grid1.voxels) {
@@ -931,7 +843,7 @@ void iteration(VCloud& cloud0, VCloud& cloud1, pcl::PointCloud<pcl::PointXYZRGB>
   std::vector<int> x_histogram(200 * 10);
   //for (auto object : objects1)
     //for (auto cell : object.cells)
-  for (auto i = 0; i < cloud0.size(); i++) {
+  for (size_t i = 0; i < cloud0.size(); i++) {
     VPoint point = cloud0[i];
         float x = point.x * cosf(-18.25f * M_PI / 180.0f) - point.y * sinf(-18.25f * M_PI / 180.0f);
         float y = point.x * sinf(-18.25f * M_PI / 180.0f) + point.y * cosf(-18.25f * M_PI / 180.0f);
@@ -953,7 +865,7 @@ void iteration(VCloud& cloud0, VCloud& cloud1, pcl::PointCloud<pcl::PointXYZRGB>
     if (histogram[i] > hist_max) hist_max = histogram[i];
   }
   cv::Mat x_hist = cv::Mat::zeros(hist_max, 2000, 0);
-  for (int i = 0; i < histogram.size(); i++) {
+  for (size_t i = 0; i < histogram.size(); i++) {
     for (int j = 0; j < histogram[i]; j++) {
       if (j > x_hist.cols) continue;
       x_hist.at<uchar>(j, i) = 255;
@@ -966,7 +878,7 @@ void iteration(VCloud& cloud0, VCloud& cloud1, pcl::PointCloud<pcl::PointXYZRGB>
 
   pclcloud0->clear();
   pclcloud0->resize(0);
-  for (auto i = 0; i < cloud0.size(); i++) {
+  for (size_t i = 0; i < cloud0.size(); i++) {
     prgb.x = cloud0.at(i)->x;
     prgb.y = cloud0.at(i)->y;
     prgb.z = cloud0.at(i)->z;
@@ -974,7 +886,7 @@ void iteration(VCloud& cloud0, VCloud& cloud1, pcl::PointCloud<pcl::PointXYZRGB>
   }
 
 
-  std::string stype = type == VLP16 ? "VLP" : "HDL";
+  std::string stype = type == SensorType::VLP16 ? "VLP" : "HDL";
   //pcl::transformPointCloud(*pclcloud1, *pclcloud1, transform);
   //if (idx % 5 == 0) {
   //  pcl::io::savePCDFileBinary("C:\\Users\\Bence\\Desktop\\SZTAKI\\DATA\\PCD\\OUTPUT\\" + stype + "\\" 
@@ -1102,7 +1014,7 @@ void iteration_pcl(pcl::PointCloud<PCLMyPointType>::Ptr& inputcloud0,
 
   pcl::PointXYZRGB pclp;
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud0(new pcl::PointCloud<pcl::PointXYZRGB>());
-  for (auto i = 0; i < cloud0.size(); i++) {
+  for (size_t i = 0; i < cloud0.size(); i++) {
     pclp.x = cloud0.at(i)->x;
     pclp.y = cloud0.at(i)->y;
     pclp.z = cloud0.at(i)->z;
@@ -1123,7 +1035,7 @@ void iteration_pcl(pcl::PointCloud<PCLMyPointType>::Ptr& inputcloud0,
 
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud1(new pcl::PointCloud<pcl::PointXYZRGB>());
   pcl::PointXYZRGB prgb;
-  for (int i = 0; i < cloud1.size(); i++) {
+  for (size_t i = 0; i < cloud1.size(); i++) {
     prgb.x = cloud1[i].x;
     prgb.y = cloud1[i].y;
     prgb.z = cloud1[i].z;
@@ -1230,7 +1142,7 @@ void iteration_pcl(pcl::PointCloud<PCLMyPointType>::Ptr& inputcloud0,
 
   pclcloud0->clear();
   pclcloud0->resize(0);
-  for (auto i = 0; i < cloud0.size(); i++) {
+  for (size_t i = 0; i < cloud0.size(); i++) {
     prgb.x = cloud0.at(i)->x;
     prgb.y = cloud0.at(i)->y;
     prgb.z = cloud0.at(i)->z;
@@ -1244,7 +1156,7 @@ void iteration_pcl(pcl::PointCloud<PCLMyPointType>::Ptr& inputcloud0,
   sw.end();
   std::cout << "2: " << sw.duration() << " ms." << std::endl;
 
-  std::string stype = type == VLP16 ? "VLP" : "HDL";
+  std::string stype = type == SensorType::VLP16 ? "VLP" : "HDL";
   pcl::transformPointCloud(*pclcloud1, *pclcloud1, transform);
 
   for (auto p : pclcloud1->points) {
@@ -1331,7 +1243,7 @@ void iteration_segment(VCloud& cloud, pcl::visualization::CloudViewer& viewer, s
   }
   points0 = points;
 
-  for (auto i = 1; i < cloud.size() / 16; i++) {
+  for (size_t i = 1; i < cloud.size() / 16; i++) {
     points.clear();
     points.resize(0);
     for (int j = 0; j < 16; j++) {
@@ -1379,7 +1291,7 @@ void iteration_segment(VCloud& cloud, pcl::visualization::CloudViewer& viewer, s
     rgbs[i] = cv::Vec3b(rand() % 255, rand() % 255, rand() % 255);
   }
   std::cout << id << " " << pclcloud->size() << " " << labels.size() << std::endl;
-  for (int i = 0; i < pclcloud->size(); i++) {
+  for (size_t i = 0; i < pclcloud->size(); i++) {
     pclcloud->at(i).r = rgbs[labels[i]](0);
     pclcloud->at(i).g = rgbs[labels[i]](1);
     pclcloud->at(i).b = rgbs[labels[i]](2);
@@ -1434,7 +1346,7 @@ void pcap_streamer2(std::string pcap) {
 
   pcl::visualization::CloudViewer viewer("Stream");
   VelodyneStreamer vs;
-  SensorType type = HDL64;
+  SensorType type = SensorType::HDL64;
 
   //cv::namedWindow("range_image", cv::WINDOW_NORMAL);
   //cv::namedWindow("object_image", cv::WINDOW_NORMAL);
@@ -1497,7 +1409,6 @@ void pcap_streamer3(std::string pcap) {
   pcl::PointCloud<PCLMyPointType>::Ptr pclcloud1(new pcl::PointCloud<PCLMyPointType>());
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloudSUM(new pcl::PointCloud<pcl::PointXYZRGB>());
 
-  PCLMyPointType pclp;
   pcl::PCDReader reader;
 
   pcl::visualization::CloudViewer viewer("Stream");
@@ -1505,9 +1416,8 @@ void pcap_streamer3(std::string pcap) {
   while (!viewer.wasStopped()) {
     StopWatch sw;
     StopWatch sw2;
-    SensorType type = VLP16;
+    SensorType type = SensorType::VLP16;
 
-    PCLMyPointType min, max;
     pclcloud0 = loadPCDASCI(folder + "0" + std::to_string(offset) + ".pcd_BIN.pcd");
 
     std::vector<cv::Vec3b> rgb;
@@ -1541,8 +1451,8 @@ void pcap_streamer3(std::string pcap) {
 std::vector<std::vector<int>> hdl32_segmentation(std::vector<std::vector<VPoint>>& pointlist) {
   std::vector<std::vector<int>> labels(pointlist.size());
 
-  for (auto i = 1; i < pointlist.size() - 1; i++) {
-    for (auto j = 1; j < pointlist[i].size() - 1; j++) {
+  for (size_t i = 1; i < pointlist.size() - 1; i++) {
+    for (size_t j = 1; j < pointlist[i].size() - 1; j++) {
 
     }
   }
@@ -1550,41 +1460,55 @@ std::vector<std::vector<int>> hdl32_segmentation(std::vector<std::vector<VPoint>
   return labels;
 }
 
+
+struct P2 {
+  float x, y;
+  P2(float _x, float _y, float _z) :x{sqrtf(_x*_x + _y*_y)}, y{_z} {}
+};
+
 void graphCanny(std::vector<std::vector<VPoint>>& pointlist, pcl::PointCloud<pcl::PointXYZRGB>& cloud) {
   pcl::PointXYZRGB pclp;
 
-  auto VPdist = [&](VPoint p1, VPoint p2) { return sqrtf((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) +
-    (p1.z - p2.z) * (p1.z - p2.z)); 
-  };
-  auto VPangle = [&](VPoint p1, VPoint p2) {
-    return (float)(fabs(p1.x * p2.x + p1.y * p2.y + p1.z * p2.z) / sqrtf(p1.x * p1.x + p1.y * p1.y + p1.z * p1.z) / sqrtf(p2.x * p2.x + p2.y * p2.y + p2.z * p2.z));
-  };
-  auto VPangles = [&](VPoint p1, VPoint p2, VPoint p3, VPoint p4) {
-    VPoint pp1; pp1.x = p1.x - p2.x; pp1.y = p1.y - p2.y; pp1.z = p1.z - p2.z;
-    VPoint pp2; pp2.x = p4.x - p3.x; pp2.y = p4.y - p3.y; pp2.z = p4.z - p3.z;
-    return VPangle(pp1, pp2);
+  auto VPdist = [&](VPoint p1, VPoint p2) { 
+    return sqrtf((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + (p1.z - p2.z) * (p1.z - p2.z)); 
   };
 
-  for (auto i = 1; i < pointlist.size() - 1; i++) {
-    for (auto j = 2; j < pointlist[i].size() - 2; j++) {
+  auto f = [&](P2 p1, P2 p2, P2 p3, P2 p4) {
+    float A = p3.y - p2.y;
+    float B = -p3.x + p2.x;
+    float C = A*p2.x + B*p2.y;
+
+    return (fabs(p1.x * A + p1.y * B + C) + fabs(p4.x * A + p4.y * B + C)) / (2 * sqrtf(A*A + B*B));
+  };
+
+  for (size_t i = 1; i < pointlist.size() - 1; i++) {
+    for (size_t j = 2; j < pointlist[i].size() - 2; j++) {
       pclp.x = pointlist[i][j].x;
       pclp.y = pointlist[i][j].y;
       pclp.z = pointlist[i][j].z;
-      if (VPdist(pointlist[i][j], pointlist[i + 1][j]) * 255 > 150 || VPdist(pointlist[i][j], pointlist[i - 1][j]) * 255 > 150) {
+
+      float f_value = f({pointlist[i][j - 1].x, pointlist[i][j - 1].y, pointlist[i][j - 1].z}, 
+                 {pointlist[i][j].x, pointlist[i][j].y, pointlist[i][j].z},
+                 {pointlist[i][j + 1].x, pointlist[i][j + 1].y, pointlist[i][j + 1].z},
+                 {pointlist[i][j + 2].x, pointlist[i][j + 2].y, pointlist[i][j + 2].z});
+
+      if (false && (VPdist(pointlist[i][j], pointlist[i + 1][j]) * 255 > 150 || VPdist(pointlist[i][j], pointlist[i - 1][j]) * 255 > 150)) {
         pclp.r = 255;
         pclp.g = 0;
         pclp.b = 0;
       }
-      else if ((255 - VPangles(pointlist[i][j - 1], pointlist[i][j], pointlist[i][j + 1], pointlist[i][j + 2]) * 255 > 230) ||
-      (255 - VPangles(pointlist[i][j - 2], pointlist[i][j - 1], pointlist[i][j], pointlist[i][j + 1]) * 255 > 230)) {
+      else if (false && (f({pointlist[i][j - 1].x, pointlist[i][j - 1].y, pointlist[i][j - 1].z}, 
+                 {pointlist[i][j].x, pointlist[i][j].y, pointlist[i][j].z},
+                 {pointlist[i][j + 1].x, pointlist[i][j + 1].y, pointlist[i][j + 1].z},
+                 {pointlist[i][j + 2].x, pointlist[i][j + 2].y, pointlist[i][j + 2].z}) * 255 > 150)) {
         pclp.r = 0;
         pclp.g = 0;
         pclp.b = 255;
       }
       else {
-        pclp.r = 0;
-        pclp.g = 0;
-        pclp.b = 0;
+        pclp.r = std::min(f_value, 20.0f) / 20.0f * 255;
+        pclp.g = std::min(f_value, 20.0f) / 20.0f * 255;
+        pclp.b = std::min(f_value, 20.0f) / 20.0f * 255;
       }
       cloud.push_back(pclp);
     }
@@ -1641,26 +1565,115 @@ void ASCI_to_BINARY(std::string file_name) {
   pcl::PointCloud<PCLMyPointType> cloud;
   pcl::PCDReader reader;
   reader.read(file_name, cloud);
-  pcl::io::savePCDFileBinary(file_name + "_BIN.pcd", cloud);
-
-  
+  pcl::io::savePCDFileBinary(file_name + "_BIN.pcd", cloud);  
 }
 
 int main() {
 
-  // pcap_hdl64_segment("/media/bence/Data/DATA/PCAP/HDL64/Autós mérések/20160202/2016-02-02-09-37-19_Velodyne-HDL-Data.pcap");
-  pcap_hdl32_segment("/media/bence/Data/DATA/PCAP/HDL32/HDL32-V2_Monterey Highway.pcap");
-  return 0;
+  VelodyneStreamer vs1;
+  vs1.open("/media/bence/Data/DATA/PCAP/VLP16/Autós mérések/20160825/2016-08-25-16-53-18_Velodyne-VLP-16-DataAbsoluteGeo.pcap");
+  vs1.sensor = SensorType::VLP16;
+  
+  VelodyneStreamer vs2;
+  vs2.open("/media/bence/Data/DATA/PCAP/HDL64/Autós mérések/20160825/02.pcap");
+  vs2.sensor = SensorType::HDL64;
 
-  std::string folder = 
-    "C:\\Users\\bence\\Desktop\\SZTAKI\\DATA\\PCAP\\HDL64\\2016-02-02-09-57-03_Velodyne-HDL-Data\\2016-02-02-09-57-03_Velodyne-HDL-Data (Frame 0" ;//"C:\\Users\\bence\\Desktop\\deak\\CapturedFrame_";
-  for (int i = 0; i < 101; i++) {
-    //if (i < 10) ASCI_to_BINARY(folder + "00" + std::to_string(i) + ".pcd");
-    //else if (i < 100) ASCI_to_BINARY(folder + "0" + std::to_string(i) + ".pcd");
-    //else ASCI_to_BINARY(folder + std::to_string(i) + ".pcd");
+  VCloud cloud1, cloud2;
+  pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud(new pcl::PointCloud<pcl::PointXYZRGB>());
+  pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud1(new pcl::PointCloud<pcl::PointXYZRGB>());
+  pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud2(new pcl::PointCloud<pcl::PointXYZRGB>());
+
+  while(vs1.nextFrame(cloud1) && cloud1.at(0)->timestamp < 3260000000); std::cout << "VLP kiporgetve" << std::endl;
+  while(vs2.nextFrame(cloud2) && cloud2.at(0)->timestamp < 3260000000); std::cout << "HDL kiporgetve" << std::endl;
+
+  VCloud CL1, CL2;
+  VPoint p;
+  while(vs1.nextFrame(cloud1) && cloud1.at(0)->timestamp < 3300000000) {
+    for (size_t i = 0; i < cloud1.size(); i++) {
+      p.x = cloud1.at(i)->x;
+      p.y = cloud1.at(i)->y;
+      p.z = cloud1.at(i)->z;
+      p.distance = cloud1.at(i)->distance;
+      p.timestamp = cloud1.at(i)->timestamp;
+      CL1.push_back(p);
+    }
+  }
+  while(vs2.nextFrame(cloud2) && cloud2.at(0)->timestamp < 3300000000) {
+    for (size_t i = 0; i < cloud2.size(); i++) {
+      p.x = cloud2.at(i)->x;
+      p.y = cloud2.at(i)->y;
+      p.z = cloud2.at(i)->z;
+      p.distance = cloud2.at(i)->distance;
+      p.timestamp = cloud2.at(i)->timestamp;
+      CL2.push_back(p);
+    }
+  }
+  
+  
+  pcl::visualization::CloudViewer viewer("c");
+  
+  unsigned int i1 = 0, i2 = 0;
+  unsigned int timestamp_threshold = 3260000000;
+  while(true) {
+
+    pclcloud->clear();
+    pclcloud->resize(0);
+
+    pclcloud1->clear();
+    pclcloud1->resize(0);
+
+    pclcloud2->clear();
+    pclcloud2->resize(0);
+
+    pcl::PointXYZRGB p;
+           
+    float X = 0.0f, Y = 0.0f, Z = 0.0f;
+    int number = 0;
+    while (CL1.at(i1)->timestamp < timestamp_threshold + 100000 && i1 < CL1.size()) {
+      p.x = CL1.at(i1)->x * cosf(-M_PI_2 * 0.925f) - CL1.at(i1)->y * sinf(-M_PI_2 * 0.925f);
+      p.y = CL1.at(i1)->x * sinf(-M_PI_2 * 0.925f) + CL1.at(i1)->y * cosf(-M_PI_2 * 0.925f);
+      p.z = CL1.at(i1)->z;
+      p.r = 255;
+      p.g = 0;
+      p.b = 0;
+      pclcloud1->push_back(p);
+      i1++; 
+
+      if (sqrtf(p.x * p.x + p.y * p.y + p.z * p.z) < 1.0f) {
+        X = (p.x + number * X) / (number + 1);
+        Y = (p.y + number * X) / (number + 1);
+        Z = (p.z + number * X) / (number + 1);
+        number++;
+      }
+    }
+
+    while (CL2.at(i2)->timestamp < timestamp_threshold + 100000 && i2 < CL2.size()) {
+      p.x = CL2.at(i2)->x + X;
+      p.y = CL2.at(i2)->y + Y;
+      p.z = CL2.at(i2)->z + Z;
+      p.r = 0;
+      p.g = 0;
+      p.b = 255;
+      pclcloud2->push_back(p);
+      i2++;
+    }
+    
+ 
+    for (size_t j = 0; j < pclcloud1->size(); j++) {
+      pclcloud->push_back(pclcloud1->at(j));
+    }    
+    for (size_t j = 0; j < pclcloud2->size(); j++) {
+      pclcloud->push_back(pclcloud2->at(j));
+    }
+    
+    viewer.showCloud(pclcloud);
+    
+    timestamp_threshold += 100000;
+    std::this_thread::sleep_for(0.1s);    
   }
 
-  int wait_for_end;
-  std::cin >> wait_for_end;
+  // pcap_hdl64_segment("/media/bence/Data/DATA/PCAP/HDL64/Autós mérések/20160202/2016-02-02-09-37-19_Velodyne-HDL-Data.pcap");
+  // pcap_hdl32_segment("/media/bence/Data/DATA/PCAP/HDL32/HDL32-V2_Monterey Highway.pcap");
+
   return 0;
 }
