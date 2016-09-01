@@ -32,6 +32,7 @@
 // VLP16_project
 #include <VCloud.h>
 #include <VelodyneStreamer.h>
+#include "PcapReader.h"
 
 using namespace std::chrono_literals;
 
@@ -1568,14 +1569,14 @@ void ASCI_to_BINARY(std::string file_name) {
   pcl::io::savePCDFileBinary(file_name + "_BIN.pcd", cloud);  
 }
 
-int main() {
+int main() { 
 
   VelodyneStreamer vs1;
-  vs1.open("/media/bence/Data/DATA/PCAP/VLP16/Autós mérések/20160825/2016-08-25-16-53-18_Velodyne-VLP-16-DataAbsoluteGeo.pcap");
+  vs1.open("/media/bence/Data/DATA/PCAP/VLP16/Autós mérések/20160825/2016-08-25-16-49-44_Velodyne-VLP-16-Data.pcap");
   vs1.sensor = SensorType::VLP16;
   
   VelodyneStreamer vs2;
-  vs2.open("/media/bence/Data/DATA/PCAP/HDL64/Autós mérések/20160825/02.pcap");
+  vs2.open("/media/bence/Data/DATA/PCAP/HDL64/Autós mérések/20160825/01.pcap_2.pcap");
   vs2.sensor = SensorType::HDL64;
 
   VCloud cloud1, cloud2;
@@ -1583,12 +1584,15 @@ int main() {
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud1(new pcl::PointCloud<pcl::PointXYZRGB>());
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclcloud2(new pcl::PointCloud<pcl::PointXYZRGB>());
 
-  while(vs1.nextFrame(cloud1) && cloud1.at(0)->timestamp < 3260000000); std::cout << "VLP kiporgetve" << std::endl;
-  while(vs2.nextFrame(cloud2) && cloud2.at(0)->timestamp < 3260000000); std::cout << "HDL kiporgetve" << std::endl;
+  vs1.nextFrame(cloud1);
+  unsigned int timestamp_threshold = cloud1[0].timestamp;
+  vs2.nextFrame(cloud2);
+  std::cout << cloud1[0].timestamp << " " << cloud2[0].timestamp << std::endl;
+  while(vs2.nextFrame(cloud2) && cloud2.at(0)->timestamp < timestamp_threshold); std::cout << "HDL kiporgetve" << std::endl;
 
   VCloud CL1, CL2;
   VPoint p;
-  while(vs1.nextFrame(cloud1) && cloud1.at(0)->timestamp < 3300000000) {
+  while(vs1.nextFrame(cloud1) && cloud1.at(0)->timestamp < timestamp_threshold + 50000000) {
     for (size_t i = 0; i < cloud1.size(); i++) {
       p.x = cloud1.at(i)->x;
       p.y = cloud1.at(i)->y;
@@ -1598,8 +1602,8 @@ int main() {
       CL1.push_back(p);
     }
   }
-  while(vs2.nextFrame(cloud2) && cloud2.at(0)->timestamp < 3300000000) {
-    for (size_t i = 0; i < cloud2.size(); i++) {
+  while(vs2.nextFrame(cloud2) && cloud2.at(0)->timestamp < timestamp_threshold + 50000000) {
+    for (size_t i = 0; i < cloud2.size(); i += 5) {
       p.x = cloud2.at(i)->x;
       p.y = cloud2.at(i)->y;
       p.z = cloud2.at(i)->z;
@@ -1609,12 +1613,13 @@ int main() {
     }
   }
   
+  std::cout << CL1.size() << " " << CL2.size() << std::endl;
   
   pcl::visualization::CloudViewer viewer("c");
-  
   unsigned int i1 = 0, i2 = 0;
-  unsigned int timestamp_threshold = 3260000000;
   while(true) {
+    std::chrono::time_point<std::chrono::system_clock> start, end;
+    start = std::chrono::system_clock::now();
 
     pclcloud->clear();
     pclcloud->resize(0);
@@ -1669,7 +1674,8 @@ int main() {
     viewer.showCloud(pclcloud);
     
     timestamp_threshold += 100000;
-    std::this_thread::sleep_for(0.1s);    
+    end = std::chrono::system_clock::now();
+    std::this_thread::sleep_for(end - start);    
   }
 
   // pcap_hdl64_segment("/media/bence/Data/DATA/PCAP/HDL64/Autós mérések/20160202/2016-02-02-09-37-19_Velodyne-HDL-Data.pcap");
